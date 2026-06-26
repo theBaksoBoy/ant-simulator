@@ -189,6 +189,10 @@ Draw :: proc() {
 
 
 SpawnPheromone :: proc(pos: rl.Vector2) {
+
+    // don't spawn a pheromone if it is out of bounds
+    if int(pos.x) < 0 || int(pos.x) >= MAP_DIMENSIONS.x || int(pos.y) < 0 || int(pos.y) >= MAP_DIMENSIONS.y do return
+
     append(&tiles[int(pos.x)][int(pos.y)].pheromones_made_when_scavenging, Pheromone{
         pos,
         runtime_frames + PHEROMONE_FRAME_LIFETIME,
