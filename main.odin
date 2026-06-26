@@ -18,13 +18,13 @@ PHEROMONE_SPAWN_FREQUENCY : u16 : 120 // how many frames until a pheromone is sp
 
 Ant :: struct {
     pos: rl.Vector2,
-    angle: f32,
+    direction: rl.Vector2,
     velocity: f32,
     angular_velocity: f32,
 
     frames_until_pheromone_spawn: u16,
 
-    walk_speed_multiplier: f32,
+    walkspeed_multiplier: f32,
     turning_noise_seed: i64,
 }
 
@@ -79,7 +79,7 @@ main :: proc() {
 
         ants[i] = Ant{
             {f32(MAP_DIMENSIONS.x) * 0.5, f32(MAP_DIMENSIONS.y) * 0.5},
-            rand.float32_range(0, math.TAU),
+            RotateVector2({1, 0}, rand.float32_range(0, math.TAU)),
             0,
             0,
 
@@ -102,32 +102,31 @@ main :: proc() {
 Update :: proc() {
 
     for &ant in ants {
-        ant.pos.x += math.cos(ant.angle) * ant.velocity * ant.walk_speed_multiplier
-        ant.pos.y += math.sin(ant.angle) * ant.velocity * ant.walk_speed_multiplier
+        ant.pos += ant.direction * ant.velocity * ant.walkspeed_multiplier
 
         ant.velocity += 0.0001
         ant.velocity = min(ant.velocity, 0.015)
 
-        ant.angle += ant.angular_velocity
+        ant.direction = RotateVector2(ant.direction, ant.angular_velocity)
 
         ant.angular_velocity = noise.noise_2d(ant.turning_noise_seed, {runtime_duration * 0.2, 0}) * 0.01
 
         // temporary logic for making them not go out of bounds
         if ant.pos.x < 0.01 {
             ant.pos.x = 0.01
-            ant.angle += math.PI
+            ant.direction *= -1
         }
         if ant.pos.x > f32(MAP_DIMENSIONS.x) - 0.01 {
             ant.pos.x = f32(MAP_DIMENSIONS.x) - 0.01
-            ant.angle += math.PI
+            ant.direction *= -1
         }
         if ant.pos.y < 0.01 {
             ant.pos.y = 0.01
-            ant.angle += math.PI
+            ant.direction *= -1
         }
         if ant.pos.y > f32(MAP_DIMENSIONS.y) - 0.01 {
             ant.pos.y = f32(MAP_DIMENSIONS.y) - 0.01
-            ant.angle += math.PI
+            ant.direction *= -1
         }
 
         ant.frames_until_pheromone_spawn -= 1
@@ -194,4 +193,14 @@ SpawnPheromone :: proc(pos: rl.Vector2) {
         pos,
         runtime_frames + PHEROMONE_FRAME_LIFETIME,
     })
+}
+
+
+
+RotateVector2 :: proc (vec: rl.Vector2, angle: f32) -> rl.Vector2 {
+
+    sin_angle := math.sin_f32(angle)
+    cos_angle := math.cos_f32(angle)
+
+    return rl.Vector2{vec.x * cos_angle - vec.y * sin_angle, vec.x * sin_angle + vec.y * cos_angle}
 }
