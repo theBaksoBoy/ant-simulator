@@ -40,7 +40,6 @@ main :: proc() {
     rl.ToggleFullscreen()
     rl.SetExitKey(.KEY_NULL)
     rl.SetTargetFPS(60)
-    rl.DisableCursor()
 
     // initialize ants
     for i in 0..<ANT_COUNT {
