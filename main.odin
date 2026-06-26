@@ -31,7 +31,8 @@ Ant :: struct {
 
 
 TileData :: struct {
-    pheromones_made_when_scavenging: [dynamic]Pheromone
+    pheromones_made_when_scavenging: [dynamic]Pheromone,
+    food_sources: [dynamic]FoodSource,
 }
 
 
@@ -42,6 +43,10 @@ Pheromone :: struct {
 }
 
 
+
+FoodSource :: struct {
+    pos: rl.Vector2,
+}
 
 camera := rl.Camera2D{
     {f32(WINDOW_DIMENSIONS.x) * 0.5, f32(WINDOW_DIMENSIONS.y) * 0.5},
@@ -67,19 +72,27 @@ main :: proc() {
 
             pheromones_made_when_scavenging := make([dynamic]Pheromone)
             defer delete(pheromones_made_when_scavenging)
+            food_sources := make([dynamic]FoodSource)
+            defer delete(food_sources)
 
             tiles[x][y] = TileData {
                 pheromones_made_when_scavenging,
+                food_sources,
             }
         }
     }
+
+    // temp hard-coded food source spawning
+    append(&tiles[14][2].food_sources, FoodSource{
+        {14.5, 2.5},
+    })
 
     // initialize ants
     for i in 0..<ANT_COUNT {
 
         ants[i] = Ant{
             {f32(MAP_DIMENSIONS.x) * 0.5, f32(MAP_DIMENSIONS.y) * 0.5},
-            RotateVector2({1, 0}, rand.float32_range(0, math.TAU)),
+            RotateV2({1, 0}, rand.float32_range(0, math.TAU)),
             0,
             0,
 
@@ -102,14 +115,19 @@ main :: proc() {
 Update :: proc() {
 
     for &ant in ants {
+
+        ant.angular_velocity = 0
+
+        ant.angular_velocity += GetAntTurnAmount(&ant)
+
         ant.pos += ant.direction * ant.velocity * ant.walkspeed_multiplier
 
         ant.velocity += 0.0001
         ant.velocity = min(ant.velocity, 0.015)
 
-        ant.direction = RotateVector2(ant.direction, ant.angular_velocity)
+        ant.direction = RotateV2(ant.direction, ant.angular_velocity)
 
-        ant.angular_velocity = noise.noise_2d(ant.turning_noise_seed, {runtime_duration * 0.2, 0}) * 0.01
+        ant.angular_velocity += noise.noise_2d(ant.turning_noise_seed, {runtime_duration * 0.2, 0}) * 0.01
 
         // temporary logic for making them not go out of bounds
         if ant.pos.x < 0.01 {
@@ -173,6 +191,10 @@ Draw :: proc() {
                 for &pheromone in tiles[x][y].pheromones_made_when_scavenging {
                     rl.DrawRectangleV(pheromone.pos, {1/CAMERA_ZOOM, 1/CAMERA_ZOOM}, {255, 0, 0, 255}) // wacky thing done here instead of DrawPixel as the drawn pixels become huge due to the camera zoom
                 }
+
+                for &food_source in tiles[x][y].food_sources {
+                    rl.DrawCircleV(food_source.pos, 0.2, {0, 255, 0, 255})
+                }
             }
         }
 
@@ -201,10 +223,67 @@ SpawnPheromone :: proc(pos: rl.Vector2) {
 
 
 
-RotateVector2 :: proc (vec: rl.Vector2, angle: f32) -> rl.Vector2 {
+RotateV2 :: proc (vec: rl.Vector2, angle: f32) -> rl.Vector2 {
 
     sin_angle := math.sin_f32(angle)
     cos_angle := math.cos_f32(angle)
 
     return rl.Vector2{vec.x * cos_angle - vec.y * sin_angle, vec.x * sin_angle + vec.y * cos_angle}
+}
+
+
+
+// how much the ant should turn each frame due to what it sees around it
+GetAntTurnAmount :: proc(ant: ^Ant) -> f32 {
+
+    // loop through the indices of all tiles that are possible for the ant to see with its detection radius
+    // (loops through all tiles in a 3x3 grid centered on the ant)
+    for x in max(int(ant.pos.x)-1, 0) ..< min(int(ant.pos.x)+2, MAP_DIMENSIONS.x) {
+        for y in max(int(ant.pos.y)-1, 0) ..< min(int(ant.pos.y)+2, MAP_DIMENSIONS.y) {
+
+            // steer towards food sources
+            for &food_source in tiles[x][y].food_sources {
+                if IsPosInLineOfSight(food_source.pos, ant.pos, ant.direction) {
+
+                    target_direction := NormalizedV2(food_source.pos - ant.pos)
+                    return DotProductV2({ant.direction.y, -ant.direction.x}, target_direction) * -0.04
+                }
+            }
+        }
+    }
+
+    return 0
+}
+
+
+
+// checks if the specified position is able to be seen by an ant
+IsPosInLineOfSight :: proc(pos, ant_pos, ant_direction: rl.Vector2) -> bool {
+
+    // check if point is closer than the ant's detection radius of 1
+    delta: rl.Vector2 = pos - ant_pos
+    if delta.x * delta.x + delta.y * delta.y > 1 do return false
+
+    // checks if point is within it's field of view using the dot product. A dot product of 0.7 is roughly equivalent to an FOV of 80
+    if DotProductV2(ant_direction, NormalizedV2(delta)) < 0.7 do return false
+
+    return true
+}
+
+
+
+DotProductV2 :: proc(a, b: rl.Vector2) -> f32 {
+    return a.x*b.x + a.y*b.y
+}
+
+
+
+MagnitudeV2 :: proc(a: rl.Vector2) -> f32 {
+    return math.sqrt(a.x*a.x + a.y*a.y)
+}
+
+
+
+NormalizedV2 :: proc(a: rl.Vector2) -> rl.Vector2 {
+    return a / MagnitudeV2(a)
 }
