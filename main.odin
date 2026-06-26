@@ -8,6 +8,8 @@ import "core:math/rand"
 
 
 ANT_COUNT :: 100
+MAP_DIMENSIONS : rl.Vector2 : {16, 9}
+WINDOW_DIMENSIONS : [2]i32 : {1920, 1080}
 
 
 
@@ -23,12 +25,18 @@ Ant :: struct {
 
 
 
+camera := rl.Camera2D{
+    {f32(WINDOW_DIMENSIONS.x) * 0.5, f32(WINDOW_DIMENSIONS.y) * 0.5},
+    MAP_DIMENSIONS * 0.5,
+    0,
+    115,
+}
 runtime_length: f64
 ants: [ANT_COUNT]Ant
 
 main :: proc() {
 
-    rl.InitWindow(1920, 1080, "ant simulator")
+    rl.InitWindow(WINDOW_DIMENSIONS.x, WINDOW_DIMENSIONS.y, "ant simulator")
     rl.ToggleFullscreen()
     rl.SetExitKey(.KEY_NULL)
     rl.SetTargetFPS(60)
@@ -36,8 +44,9 @@ main :: proc() {
 
     // initialize ants
     for i in 0..<ANT_COUNT {
+
         ants[i] = Ant{
-            {1920/2, 1080/2}, // NOTE! MAKE THESE INTO WORLD_SPACE COORDINATES LATER INSTEAD OF SCEREN_SPACE, WHERE YOU ALSO USE A CAMERA!
+            MAP_DIMENSIONS * 0.5,
             rand.float32_range(0, math.TAU),
             0,
             0,
@@ -61,8 +70,8 @@ Update :: proc() {
         ant.pos.x += math.cos(ant.angle) * ant.velocity * ant.walk_speed_multiplier
         ant.pos.y += math.sin(ant.angle) * ant.velocity * ant.walk_speed_multiplier
 
-        ant.velocity += 0.01
-        ant.velocity = min(ant.velocity, 1.5)
+        ant.velocity += 0.0001
+        ant.velocity = min(ant.velocity, 0.015)
 
         ant.angle += ant.angular_velocity
 
@@ -78,9 +87,13 @@ Draw :: proc() {
     rl.BeginDrawing()
     rl.ClearBackground({20, 15, 15, 255}) // set background to this
 
-    for &ant in ants {
-        rl.DrawCircleV(ant.pos, 10, {255, 20, 20, 255})
+    rl.BeginMode2D(camera)
+    {
+        for &ant in ants {
+            rl.DrawCircleV(ant.pos, 0.1, {255, 20, 20, 255})
+        }
     }
+    rl.EndMode2D()
 
     rl.EndDrawing()
 }
