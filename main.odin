@@ -15,6 +15,7 @@ CAMERA_ZOOM : f32 : 120
 PHEROMONE_FRAME_LIFETIME : u64 : 600 // for how long a pheromone lasts for before disappearing
 PHEROMONE_SPAWN_FREQUENCY : u16 : 120 // how many frames until a pheromone is spawned by an ant
 TARGET_TURN_STRENGTH : f32 : 0.1 // how agressively ants will turn when they see targets like the food source or home
+PHEROMONE_TURN_STRENGTH : f32 : 0.1 // how strongly the ant turns towards pheromones
 FOOD_SOURCE_RADIUS : f32 : 0.2
 HOME_RADIUS : f32 : 0.2
 
@@ -34,7 +35,8 @@ Ant :: struct {
 }
 
 TileData :: struct {
-    pheromones_made_when_scavenging: [dynamic]Pheromone,
+    scavenging_pheromones: [dynamic]Pheromone, // pheromones spawned when an ant is searching for food
+    returning_pheromones: [dynamic]Pheromone, // pheromones spawned when an ant is trying to get home after getting food
     food_sources: [dynamic]FoodSource,
     homes: [dynamic]Home,
 }
@@ -77,15 +79,18 @@ main :: proc() {
     for x in 0..<MAP_DIMENSIONS.x {
         for y in 0..<MAP_DIMENSIONS.y {
 
-            pheromones_made_when_scavenging := make([dynamic]Pheromone)
-            defer delete(pheromones_made_when_scavenging)
+            scavenging_pheromones := make([dynamic]Pheromone)
+            defer delete(scavenging_pheromones)
+            returning_pheromones := make([dynamic]Pheromone)
+            defer delete(returning_pheromones)
             food_sources := make([dynamic]FoodSource)
             defer delete(food_sources)
             homes := make([dynamic]Home)
             defer delete(homes)
 
             tiles[x][y] = TileData {
-                pheromones_made_when_scavenging,
+                scavenging_pheromones,
+                returning_pheromones,
                 food_sources,
                 homes,
             }
@@ -166,7 +171,7 @@ Update :: proc() {
         ant.frames_until_pheromone_spawn -= 1
         if ant.frames_until_pheromone_spawn <= 0 {
             ant.frames_until_pheromone_spawn = PHEROMONE_SPAWN_FREQUENCY
-            SpawnPheromone(ant.pos)
+            SpawnPheromone(ant.pos, !ant.holding_food)
         }
     }
 
@@ -175,14 +180,14 @@ Update :: proc() {
     for x in 0..<MAP_DIMENSIONS.x {
         for y in 0..<MAP_DIMENSIONS.y {
 
-            for &pheromone, i in tiles[x][y].pheromones_made_when_scavenging {
+            for &pheromone, i in tiles[x][y].scavenging_pheromones {
 
                 // deleting items from the array can cause index to go out of bounds. This prevents that from happening
-                if i >= len(tiles[x][y].pheromones_made_when_scavenging) do break
+                if i >= len(tiles[x][y].scavenging_pheromones) do break
 
                 if runtime_frames > pheromone.dicipate_frame {
                     // I think an unordered remove makes it possible that some pheromones that should be removed are skipped, but they will be deleted next frame so it's fine
-                    unordered_remove(&tiles[x][y].pheromones_made_when_scavenging, i)
+                    unordered_remove(&tiles[x][y].scavenging_pheromones, i)
                 }
             }
         }
@@ -204,8 +209,11 @@ Draw :: proc() {
         for x in 0..<MAP_DIMENSIONS.x {
             for y in 0..<MAP_DIMENSIONS.y {
 
-                for &pheromone in tiles[x][y].pheromones_made_when_scavenging {
+                for &pheromone in tiles[x][y].scavenging_pheromones {
                     rl.DrawRectangleV(pheromone.pos, {1/CAMERA_ZOOM, 1/CAMERA_ZOOM}, {255, 0, 0, 255}) // wacky thing done here instead of DrawPixel as the drawn pixels become huge due to the camera zoom
+                }
+                for &pheromone in tiles[x][y].returning_pheromones {
+                    rl.DrawRectangleV(pheromone.pos, {1/CAMERA_ZOOM, 1/CAMERA_ZOOM}, {0, 255, 0, 255}) // wacky thing done here instead of DrawPixel as the drawn pixels become huge due to the camera zoom
                 }
 
                 for &food_source in tiles[x][y].food_sources {
@@ -232,15 +240,23 @@ Draw :: proc() {
 
 
 
-SpawnPheromone :: proc(pos: rl.Vector2) {
+SpawnPheromone :: proc(pos: rl.Vector2, is_scavenging_pheromone: bool) {
 
     // don't spawn a pheromone if it is out of bounds
     if int(pos.x) < 0 || int(pos.x) >= MAP_DIMENSIONS.x || int(pos.y) < 0 || int(pos.y) >= MAP_DIMENSIONS.y do return
 
-    append(&tiles[int(pos.x)][int(pos.y)].pheromones_made_when_scavenging, Pheromone{
-        pos,
-        runtime_frames + PHEROMONE_FRAME_LIFETIME,
-    })
+    if is_scavenging_pheromone {
+        append(&tiles[int(pos.x)][int(pos.y)].scavenging_pheromones, Pheromone{
+            pos,
+            runtime_frames + PHEROMONE_FRAME_LIFETIME,
+        })
+    }
+    else {
+        append(&tiles[int(pos.x)][int(pos.y)].returning_pheromones, Pheromone{
+            pos,
+            runtime_frames + PHEROMONE_FRAME_LIFETIME,
+        })
+    }
 }
 
 
@@ -290,24 +306,52 @@ LoopThroughTilesInAntRange :: proc(ant: ^Ant) {
 
 GetAntTurnAmount :: proc(ant: ^Ant, tile_x, tile_y: int) -> (turn_amount: f32, turn_decided: bool) {
 
-    // steer towards food sources if it doesn't hold any food
     if !ant.holding_food {
 
+        // steer towards food sources if it doesn't hold any food
         for &food_source in tiles[tile_x][tile_y].food_sources {
             if IsPosInLineOfSight(food_source.pos, ant.pos, ant.direction) {
-
                 target_direction := NormalizedV2(food_source.pos - ant.pos)
                 return DotProductV2({ant.direction.y, -ant.direction.x}, target_direction) * -TARGET_TURN_STRENGTH, true
             }
         }
+
+        pheromone_turning_weight: f32
+        pheromone_count: int
+        for &returning_pheromone in tiles[tile_x][tile_y].returning_pheromones {
+            if IsPosInLineOfSight(returning_pheromone.pos, ant.pos, ant.direction) {
+                target_direction := NormalizedV2(returning_pheromone.pos - ant.pos)
+                pheromone_turning_weight += DotProductV2({ant.direction.y, -ant.direction.x}, target_direction)
+                pheromone_count += 1
+            }
+        }
+        if pheromone_count > 0 {
+            return pheromone_turning_weight / f32(pheromone_count) * -PHEROMONE_TURN_STRENGTH, true
+        }
+
+        // steer towards returning pheromones
     } else {
+
         // steer towards home if it is holding food
         for &home in tiles[tile_x][tile_y].homes {
             if IsPosInLineOfSight(home.pos, ant.pos, ant.direction) {
-
                 target_direction := NormalizedV2(home.pos - ant.pos)
                 return DotProductV2({ant.direction.y, -ant.direction.x}, target_direction) * -TARGET_TURN_STRENGTH, true
             }
+        }
+
+        // steer towards scavenging pheromones
+        pheromone_turning_weight: f32
+        pheromone_count: int
+        for &scavenging_pheromone in tiles[tile_x][tile_y].scavenging_pheromones {
+            if IsPosInLineOfSight(scavenging_pheromone.pos, ant.pos, ant.direction) {
+                target_direction := NormalizedV2(scavenging_pheromone.pos - ant.pos)
+                pheromone_turning_weight += DotProductV2({ant.direction.y, -ant.direction.x}, target_direction)
+                pheromone_count += 1
+            }
+        }
+        if pheromone_count > 0 {
+            return pheromone_turning_weight / f32(pheromone_count) * -PHEROMONE_TURN_STRENGTH, true
         }
     }
 
