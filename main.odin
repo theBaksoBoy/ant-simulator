@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import rl "vendor:raylib"
 import "core:math"
 import "core:math/noise"
@@ -13,11 +14,13 @@ MAP_DIMENSIONS : [2]int : {16, 9} // the size of the map. Each integer has its o
 WINDOW_DIMENSIONS : [2]i32 : {1920, 1080}
 CAMERA_ZOOM : f32 : 120
 PHEROMONE_FRAME_LIFETIME : u64 : 600 // for how long a pheromone lasts for before disappearing
-PHEROMONE_SPAWN_FREQUENCY : u16 : 120 // how many frames until a pheromone is spawned by an ant
+PHEROMONE_SPAWN_FREQUENCY : u16 : 30 // how many frames until a pheromone is spawned by an ant
 TARGET_TURN_STRENGTH : f32 : 0.1 // how agressively ants will turn when they see targets like the food source or home
 PHEROMONE_TURN_STRENGTH : f32 : 0.1 // how strongly the ant turns towards pheromones
 FOOD_SOURCE_RADIUS : f32 : 0.2
 HOME_RADIUS : f32 : 0.2
+
+ROTATION_CHECKS : []f32 : {0, 10/math.TAU, -10/math.TAU, 20/math.TAU, -20/math.TAU, 30/math.TAU, -30/math.TAU, 40/math.TAU, -40/math.TAU, 50/math.TAU, -50/math.TAU, 60/math.TAU, -60/math.TAU, 70/math.TAU, -70/math.TAU, 80/math.TAU, -80/math.TAU, 90/math.TAU, -90/math.TAU, 100/math.TAU, -100/math.TAU, 110/math.TAU, -110/math.TAU, 120/math.TAU, -120/math.TAU, 130/math.TAU, -130/math.TAU, 140/math.TAU, -140/math.TAU, 150/math.TAU, -150/math.TAU, 160/math.TAU, -160/math.TAU, 170/math.TAU, -170/math.TAU, 180/math.TAU} // surprisingly, this actually breaks the world record for the shortest line of code ever made.
 
 
 
@@ -142,30 +145,25 @@ Update :: proc() {
         LoopThroughTilesInAntRange(&ant)
         ant.angular_velocity += noise.noise_2d(ant.turning_noise_seed, {runtime_duration * 0.2, 0}) * RANDOM_TURN_STRENGTH
 
-        ant.pos += ant.direction * ant.velocity * ant.walkspeed_multiplier
+        StepAnt(&ant)
 
         ant.velocity += 0.0001
         ant.velocity = min(ant.velocity, 0.015)
 
         ant.direction = RotateV2(ant.direction, ant.angular_velocity)
 
-
-        // temporary logic for making them not go out of bounds
-        if ant.pos.x < 0.01 {
-            ant.pos.x = 0.01
-            ant.direction *= -1
+        // ensure that the ant isn't going out of bounds
+        if ant.pos.x < 0 {
+            ant.pos.x = 0
         }
-        if ant.pos.x > f32(MAP_DIMENSIONS.x) - 0.01 {
-            ant.pos.x = f32(MAP_DIMENSIONS.x) - 0.01
-            ant.direction *= -1
+        if ant.pos.x > f32(MAP_DIMENSIONS.x) {
+            ant.pos.x = f32(MAP_DIMENSIONS.x)
         }
-        if ant.pos.y < 0.01 {
-            ant.pos.y = 0.01
-            ant.direction *= -1
+        if ant.pos.y < 0 {
+            ant.pos.y = 0
         }
-        if ant.pos.y > f32(MAP_DIMENSIONS.y) - 0.01 {
-            ant.pos.y = f32(MAP_DIMENSIONS.y) - 0.01
-            ant.direction *= -1
+        if ant.pos.y > f32(MAP_DIMENSIONS.y) {
+            ant.pos.y = f32(MAP_DIMENSIONS.y)
         }
 
         ant.frames_until_pheromone_spawn -= 1
@@ -236,6 +234,41 @@ Draw :: proc() {
     rl.EndMode2D()
 
     rl.EndDrawing()
+}
+
+
+
+StepAnt :: proc(ant: ^Ant) {
+
+    for angle in ROTATION_CHECKS {
+        rotated_direction := RotateV2(ant.direction, angle)
+        new_position := ant.pos + rotated_direction * ant.velocity * ant.walkspeed_multiplier
+        if !PositionIsColliding(new_position) {
+            ant.pos = new_position
+            ant.direction = rotated_direction
+            return
+        }
+    }
+}
+
+
+
+PositionIsColliding :: proc(pos: rl.Vector2) -> bool {
+
+    if pos.x < 0 {
+        return true
+    }
+    if pos.x > f32(MAP_DIMENSIONS.x) {
+        return true
+    }
+    if pos.y < 0 {
+        return true
+    }
+    if pos.y > f32(MAP_DIMENSIONS.y) {
+        return true
+    }
+
+    return false
 }
 
 

@@ -7,6 +7,8 @@ import "core:math"
 
 RotateV2 :: proc (vec: rl.Vector2, angle: f32) -> rl.Vector2 {
 
+    if angle == 0 do return vec
+
     sin_angle := math.sin_f32(angle)
     cos_angle := math.cos_f32(angle)
 

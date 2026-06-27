@@ -3,7 +3,8 @@
 This project is work-in-progress. This readme file will be updated once the project is done... unless I forget.
 
 TODO:
-- make them follow pheromones. Look at this video for some more specifics https://www.youtube.com/watch?v=X-iSQQgOd1A
+- fix collision logic. They still aren't taking the minimum turn angle to avoid the borders
+- make them not go into a death loop. Would better collisions with the borders help with this?
 - make consts for defining the color of everything
 - reduce max allowed velocity the greater the angular velocity is
 - (actually this might not be worth it. Only do it if you find a solution quickly) find 1D noise function for gradual turning instead of using 2D noise which is more expensive
