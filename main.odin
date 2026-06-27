@@ -8,11 +8,15 @@ import "core:math/rand"
 
 
 ANT_COUNT :: 100
+RANDOM_TURN_STRENGTH :: 0.02
 MAP_DIMENSIONS : [2]int : {16, 9} // the size of the map. Each integer has its own cell that stores different data
 WINDOW_DIMENSIONS : [2]i32 : {1920, 1080}
 CAMERA_ZOOM : f32 : 120
 PHEROMONE_FRAME_LIFETIME : u64 : 600 // for how long a pheromone lasts for before disappearing
 PHEROMONE_SPAWN_FREQUENCY : u16 : 120 // how many frames until a pheromone is spawned by an ant
+TARGET_TURN_STRENGTH : f32 : 0.1 // how agressively ants will turn when they see targets like the food source or home
+FOOD_SOURCE_RADIUS : f32 : 0.2
+HOME_RADIUS : f32 : 0.2
 
 
 
@@ -21,6 +25,7 @@ Ant :: struct {
     direction: rl.Vector2,
     velocity: f32,
     angular_velocity: f32,
+    holding_food: bool,
 
     frames_until_pheromone_spawn: u16,
 
@@ -28,25 +33,27 @@ Ant :: struct {
     turning_noise_seed: i64,
 }
 
-
-
 TileData :: struct {
     pheromones_made_when_scavenging: [dynamic]Pheromone,
     food_sources: [dynamic]FoodSource,
+    homes: [dynamic]Home,
 }
-
-
 
 Pheromone :: struct {
     pos: rl.Vector2,
     dicipate_frame: u64 // what the runtime_frames variable has to be at until the pheromone gets deleted
 }
 
-
-
 FoodSource :: struct {
     pos: rl.Vector2,
+    food_left: int
 }
+
+Home :: struct {
+    pos: rl.Vector2,
+}
+
+
 
 camera := rl.Camera2D{
     {f32(WINDOW_DIMENSIONS.x) * 0.5, f32(WINDOW_DIMENSIONS.y) * 0.5},
@@ -74,10 +81,13 @@ main :: proc() {
             defer delete(pheromones_made_when_scavenging)
             food_sources := make([dynamic]FoodSource)
             defer delete(food_sources)
+            homes := make([dynamic]Home)
+            defer delete(homes)
 
             tiles[x][y] = TileData {
                 pheromones_made_when_scavenging,
                 food_sources,
+                homes,
             }
         }
     }
@@ -85,6 +95,11 @@ main :: proc() {
     // temp hard-coded food source spawning
     append(&tiles[14][2].food_sources, FoodSource{
         {14.5, 2.5},
+        200,
+    })
+    // temp hard-coded home spawning
+    append(&tiles[8][4].homes, Home{
+        {8, 4.5},
     })
 
     // initialize ants
@@ -95,6 +110,7 @@ main :: proc() {
             RotateV2({1, 0}, rand.float32_range(0, math.TAU)),
             0,
             0,
+            false,
 
             u16(rand.int31() % i32(PHEROMONE_SPAWN_FREQUENCY)),
 
@@ -118,7 +134,8 @@ Update :: proc() {
 
         ant.angular_velocity = 0
 
-        ant.angular_velocity += GetAntTurnAmount(&ant)
+        LoopThroughTilesInAntRange(&ant)
+        ant.angular_velocity += noise.noise_2d(ant.turning_noise_seed, {runtime_duration * 0.2, 0}) * RANDOM_TURN_STRENGTH
 
         ant.pos += ant.direction * ant.velocity * ant.walkspeed_multiplier
 
@@ -127,7 +144,6 @@ Update :: proc() {
 
         ant.direction = RotateV2(ant.direction, ant.angular_velocity)
 
-        ant.angular_velocity += noise.noise_2d(ant.turning_noise_seed, {runtime_duration * 0.2, 0}) * 0.01
 
         // temporary logic for making them not go out of bounds
         if ant.pos.x < 0.01 {
@@ -193,14 +209,20 @@ Draw :: proc() {
                 }
 
                 for &food_source in tiles[x][y].food_sources {
-                    rl.DrawCircleV(food_source.pos, 0.2, {0, 255, 0, 255})
+                    rl.DrawCircleV(food_source.pos, FOOD_SOURCE_RADIUS, {0, 255, 0, 255})
+                }
+
+                for &home in tiles[x][y].homes {
+                    rl.DrawCircleV(home.pos, HOME_RADIUS, {255, 255, 0, 255})
                 }
             }
         }
 
         // draw each ant
         for &ant in ants {
-            rl.DrawCircleV(ant.pos, 0.03, {100, 50, 200, 255})
+            ant_color: rl.Color = {100, 50, 200, 255}
+            if ant.holding_food do ant_color = {50, 200, 100, 255}
+            rl.DrawCircleV(ant.pos, 0.03, ant_color)
         }
     }
     rl.EndMode2D()
@@ -223,26 +245,73 @@ SpawnPheromone :: proc(pos: rl.Vector2) {
 
 
 
-// how much the ant should turn each frame due to what it sees around it
-GetAntTurnAmount :: proc(ant: ^Ant) -> f32 {
+LoopThroughTilesInAntRange :: proc(ant: ^Ant) {
+
+    turn_amount_decided := false
 
     // loop through the indices of all tiles that are possible for the ant to see with its detection radius
     // (loops through all tiles in a 3x3 grid centered on the ant)
-    for x in max(int(ant.pos.x)-1, 0) ..< min(int(ant.pos.x)+2, MAP_DIMENSIONS.x) {
-        for y in max(int(ant.pos.y)-1, 0) ..< min(int(ant.pos.y)+2, MAP_DIMENSIONS.y) {
+    for tile_x in max(int(ant.pos.x)-1, 0) ..< min(int(ant.pos.x)+2, MAP_DIMENSIONS.x) {
+        for tile_y in max(int(ant.pos.y)-1, 0) ..< min(int(ant.pos.y)+2, MAP_DIMENSIONS.y) {
 
-            // steer towards food sources
-            for &food_source in tiles[x][y].food_sources {
-                if IsPosInLineOfSight(food_source.pos, ant.pos, ant.direction) {
+            // only turns if a turn hasn't been decided yet. It done so that when iterating through the next tiles, that they don't overwrite the turn with a lower priority target
+            if !turn_amount_decided {
+                ant.angular_velocity, turn_amount_decided = GetAntTurnAmount(ant, tile_x, tile_y)
+            }
 
-                    target_direction := NormalizedV2(food_source.pos - ant.pos)
-                    return DotProductV2({ant.direction.y, -ant.direction.x}, target_direction) * -0.04
+            // get food when touching food source, and leave food when touching home
+            if !ant.holding_food {
+                for &food_source, i in tiles[tile_x][tile_y].food_sources {
+                    delta: rl.Vector2 = food_source.pos - ant.pos
+                    if delta.x * delta.x + delta.y * delta.y < FOOD_SOURCE_RADIUS * FOOD_SOURCE_RADIUS {
+                        ant.holding_food = true
+                        food_source.food_left -= 1
+                        if food_source.food_left <= 0 {
+                            unordered_remove(&tiles[tile_x][tile_y].food_sources, i)
+                        }
+                    }
                 }
+            } else {
+                // steer towards home if it is holding food
+                for &home in tiles[tile_x][tile_y].homes {
+                    delta: rl.Vector2 = home.pos - ant.pos
+                    if delta.x * delta.x + delta.y * delta.y < HOME_RADIUS * HOME_RADIUS {
+                        ant.holding_food = false
+                    }
+                }
+            }
+
+
+
+        }
+    }
+}
+
+
+GetAntTurnAmount :: proc(ant: ^Ant, tile_x, tile_y: int) -> (turn_amount: f32, turn_decided: bool) {
+
+    // steer towards food sources if it doesn't hold any food
+    if !ant.holding_food {
+
+        for &food_source in tiles[tile_x][tile_y].food_sources {
+            if IsPosInLineOfSight(food_source.pos, ant.pos, ant.direction) {
+
+                target_direction := NormalizedV2(food_source.pos - ant.pos)
+                return DotProductV2({ant.direction.y, -ant.direction.x}, target_direction) * -TARGET_TURN_STRENGTH, true
+            }
+        }
+    } else {
+        // steer towards home if it is holding food
+        for &home in tiles[tile_x][tile_y].homes {
+            if IsPosInLineOfSight(home.pos, ant.pos, ant.direction) {
+
+                target_direction := NormalizedV2(home.pos - ant.pos)
+                return DotProductV2({ant.direction.y, -ant.direction.x}, target_direction) * -TARGET_TURN_STRENGTH, true
             }
         }
     }
 
-    return 0
+    return 0, false
 }
 
 
